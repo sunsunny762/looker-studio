@@ -420,10 +420,11 @@ export class ReportService {
                 ...(isSparticuz ? chromium.args : []),
                 ...this.blueAwardReportConfig.behavior.browserArgs
             ]));
+            const launchTimeoutMs = Number(process.env.LOOKER_PUPPETEER_LAUNCH_TIMEOUT_MS || 180000);
             browser = await puppeteer.launch({
                 headless: this.blueAwardReportConfig.behavior.browserHeadless ?? chromium.headless,
-                timeout: 60000,
-                protocolTimeout: 60000,
+                timeout: launchTimeoutMs,
+                protocolTimeout: launchTimeoutMs,
                 ...(executablePath ? { executablePath } : {}),
                 args: browserArgs
             });

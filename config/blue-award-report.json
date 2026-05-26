@@ -1,0 +1,60 @@
+{
+  "lookerStudioSubmissionUrlParamKey": "p_submission_id",
+  "defaultBlueAwardPageUrls": [
+    "https://lookerstudio.google.com/reporting/04bc636b-75ac-4a91-8471-727b8a512ca9/page/cXtlF",
+    "https://lookerstudio.google.com/reporting/04bc636b-75ac-4a91-8471-727b8a512ca9/page/p_jbkboc28zd",
+    "https://lookerstudio.google.com/reporting/04bc636b-75ac-4a91-8471-727b8a512ca9/page/p_mzt05ia6zd",
+    "https://lookerstudio.google.com/reporting/04bc636b-75ac-4a91-8471-727b8a512ca9/page/p_fm14hysb0d",
+    "https://lookerstudio.google.com/reporting/04bc636b-75ac-4a91-8471-727b8a512ca9/page/p_l2a53iy7zd"
+  ],
+  "lookerCaptureReadyTimeoutMs": 10000,
+  "lookerPostLoadDelayMs": 10000,
+  "viewport": {
+    "width": 1300,
+    "height": 1798,
+    "deviceScaleFactor": 1
+  },
+  "trims": {
+    "left": 22,
+    "top": 46,
+    "right": 158,
+    "bottom": 4
+  },
+  "pdfLimits": {
+    "maxWidth": 3000,
+    "maxHeight": 10000
+  },
+  "urlParams": {
+    "submissionAliasKey": "submissionId",
+    "dashboardFilterKey": "df101",
+    "dashboardFilterTemplate": "include%EE%80%801%EE%80%80IN%EE%80%80{{submissionId}}",
+    "renderModeKey": "rm",
+    "renderModeValue": "minimal"
+  },
+  "render": {
+    "gotoWaitUntil": "domcontentloaded",
+    "emulateMediaType": "screen"
+  },
+  "behavior": {
+    "lookerAllowedHosts": [
+      "lookerstudio.google.com",
+      "datastudio.google.com"
+    ],
+    "minVisualCount": 3,
+    "minRichTextLength": 200,
+    "minIframeWidth": 600,
+    "minIframeHeight": 600,
+    "navigationTimeoutMs": 90000,
+    "maxAttempts": 4,
+    "retryDelayMs": 3000,
+    "horizontalPadding": 0,
+    "verticalPadding": 0,
+    "browserHeadless": true,
+    "browserArgs": [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled"
+    ]
+  }
+}

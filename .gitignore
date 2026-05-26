@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+
+# Runtime files
+logs/
+uploads/
+data/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Database dumps and backups
+database/*.zip
+database/*Data*.sql
+database/*backup*.zip
+database/*Backup*.zip
+
+# OS and editor files
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# npm/pnpm/yarn logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

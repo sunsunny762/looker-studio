@@ -8,7 +8,7 @@
     "https://lookerstudio.google.com/reporting/04bc636b-75ac-4a91-8471-727b8a512ca9/page/p_l2a53iy7zd"
   ],
   "lookerCaptureReadyTimeoutMs": 10000,
-  "lookerPostLoadDelayMs": 10000,
+  "lookerPostLoadDelayMs": 9000,
   "viewport": {
     "width": 1300,
     "height": 1798,

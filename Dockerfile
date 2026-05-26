@@ -14,11 +14,13 @@ RUN npm run build
 FROM node:20-bookworm-slim
 
 ENV NODE_ENV=staging
-ENV PORT=3000
+ENV PORT=8080
 ENV LOOKER_PUPPETEER_HEADLESS=true
 ENV LOOKER_PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV CHROME_BIN=/usr/bin/chromium
 
 WORKDIR /app
 
@@ -41,6 +43,6 @@ RUN npm install --omit=dev --include=optional --legacy-peer-deps \
 COPY --from=build /app/dist ./dist
 COPY config ./config
 
-EXPOSE 3000
+EXPOSE 8080
 
 CMD ["node", "dist/main.js"]

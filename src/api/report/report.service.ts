@@ -389,13 +389,16 @@ export class ReportService {
             // Runtime-load puppeteer so deploys fail at request time with a clear message if the browser is missing.
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const puppeteer = require('puppeteer');
+            const executablePath = process.env.LOOKER_PUPPETEER_EXECUTABLE_PATH?.trim();
             browser = await puppeteer.launch({
                 headless: this.blueAwardReportConfig.behavior.browserHeadless,
                 timeout: 60000,
                 protocolTimeout: 60000,
-                args: this.blueAwardReportConfig.behavior.browserArgs
+                args: this.blueAwardReportConfig.behavior.browserArgs,
+                ...(executablePath ? { executablePath } : {})
             });
-        } catch {
+        } catch (error) {
+            console.error('Puppeteer launch failed', error);
             throw new BadGatewayException('Puppeteer is not installed or the browser is unavailable. Run: npm install && npm run install:browser');
         }
 

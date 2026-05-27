@@ -48,6 +48,7 @@
     "maxAttempts": 2,
     "retryDelayMs": 1500,
     "captureConcurrency": 2,
+    "actionTimeoutMs": 60000,
     "horizontalPadding": 0,
     "verticalPadding": 0,
     "browserHeadless": true,

@@ -243,6 +243,10 @@ export class ReportService {
         if (Number.isInteger(captureConcurrencyOverride) && captureConcurrencyOverride > 0) {
             parsed.behavior.captureConcurrency = captureConcurrencyOverride;
         }
+        const actionTimeoutOverride = Number(process.env.LOOKER_ACTION_TIMEOUT_MS);
+        if (Number.isFinite(actionTimeoutOverride) && actionTimeoutOverride > 0) {
+            parsed.behavior.actionTimeoutMs = actionTimeoutOverride;
+        }
         return parsed;
     }
 
@@ -305,14 +309,20 @@ export class ReportService {
             message.includes('net::err_connection_timed_out') ||
             message.includes('net::err_timed_out') ||
             message.includes('net::err_network_changed') ||
-            message.includes('net::err_internet_disconnected')
+            message.includes('net::err_internet_disconnected') ||
+            message.includes('timed out after waiting')
         );
+    }
+
+    private isPuppeteerActionTimeout(error: any): boolean {
+        return String(error?.message || error || '').toLowerCase().includes('timed out after waiting');
     }
 
     private async captureLookerPageAsPdf(page: any): Promise<Buffer> {
         const screenshot = await page.screenshot({
             type: 'png',
-            fullPage: false
+            fullPage: false,
+            timeout: this.blueAwardReportConfig.behavior.actionTimeoutMs || 60000
         });
         const imageBytes = Buffer.from(screenshot);
         if (!imageBytes || imageBytes.length < 50000) {
@@ -446,7 +456,8 @@ export class ReportService {
         );
         await page.screenshot({
             path: filePath,
-            fullPage: true
+            fullPage: true,
+            timeout: this.blueAwardReportConfig.behavior.actionTimeoutMs || 60000
         });
         return filePath;
     }
@@ -563,7 +574,7 @@ export class ReportService {
             } catch (error: any) {
                 lastError = error;
                 const retryable = this.isRetryableLookerCaptureError(error);
-                if (retryable && page && !page.isClosed()) {
+                if (retryable && !this.isPuppeteerActionTimeout(error) && page && !page.isClosed()) {
                     try {
                         await this.sleep(1000);
                         const fallbackPdf = await this.captureLookerPageAsPdf(page);

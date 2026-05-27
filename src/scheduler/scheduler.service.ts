@@ -283,8 +283,9 @@ public async logRunHistoryEvent(jobId: number, scheduleFrequencyId: number, star
 private generateCronJobs(): void {
   const contextHost: ISchedulerHostContext = this;
   this._scheduleFrequencies.forEach(j => {
+      const cronDefinition = this.normalizeCronDefinition(j.cronDefinition);
       j.instance = new CronJob(
-          j.cronDefinition,
+          cronDefinition,
           async () => {
               if (j.isProcessing) { return }
               try {
@@ -305,6 +306,15 @@ private generateCronJobs(): void {
       );
   });
 
+}
+
+private normalizeCronDefinition(cronDefinition: string): string {
+  const trimmed = String(cronDefinition || '').trim();
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 6 && parts[0] === '0') {
+      return parts.slice(1).join(' ');
+  }
+  return trimmed;
 }
 
 private async _loadConfig(fullRefresh: boolean = true): Promise<void> {

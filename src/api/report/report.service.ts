@@ -290,6 +290,40 @@ export class ReportService {
         );
     }
 
+    private async captureLookerPageAsPdf(page: any): Promise<Buffer> {
+        const screenshot = await page.screenshot({
+            type: 'png',
+            fullPage: false
+        });
+        const imageBytes = Buffer.from(screenshot);
+        if (!imageBytes || imageBytes.length < 50000) {
+            throw new Error(`Captured Looker Studio screenshot is smaller than expected: ${imageBytes?.length || 0} bytes`);
+        }
+
+        const pdf = await PDFDocument.create();
+        const image = await pdf.embedPng(imageBytes);
+        const imageWidth = image.width;
+        const imageHeight = image.height;
+        const leftTrimPx = Math.max(0, this.blueAwardReportConfig.trims.left);
+        const topTrimPx = Math.max(0, this.blueAwardReportConfig.trims.top);
+        const rightTrimPx = Math.max(0, this.blueAwardReportConfig.trims.right);
+        const bottomTrimPx = Math.max(0, this.blueAwardReportConfig.trims.bottom);
+        const croppedWidth = Math.max(1, imageWidth - leftTrimPx - rightTrimPx);
+        const croppedHeight = Math.max(1, imageHeight - topTrimPx - bottomTrimPx);
+        const pdfWidth = Math.min(croppedWidth, this.blueAwardReportConfig.pdfLimits.maxWidth);
+        const pdfHeight = Math.min(croppedHeight, this.blueAwardReportConfig.pdfLimits.maxHeight);
+        const pdfPage = pdf.addPage([pdfWidth, pdfHeight]);
+
+        pdfPage.drawImage(image, {
+            x: -leftTrimPx,
+            y: -(imageHeight - croppedHeight - topTrimPx),
+            width: imageWidth,
+            height: imageHeight
+        });
+
+        return Buffer.from(await pdf.save());
+    }
+
     private async waitForReportContent(page: any): Promise<boolean> {
         const behavior = this.blueAwardReportConfig.behavior;
         try {
@@ -489,95 +523,36 @@ export class ReportService {
                         await this.sleep(this.lookerPostLoadDelayMs);
                         await page.emulateMediaType(this.blueAwardReportConfig.render.emulateMediaType as any);
 
-                        const renderSummary = await this.getRenderSummary(page);
-                        const renderedEnough =
-                            renderSummary.largeIframeCount > 0 &&
-                            (renderSummary.largeVisualCount > 0 || renderSummary.bodyTextLength >= this.blueAwardReportConfig.behavior.minRichTextLength);
-                        const renderedNoDataReport =
-                            renderSummary.bodyTextLength > 50 &&
-                            renderSummary.bodyTextLength < this.blueAwardReportConfig.behavior.minRichTextLength &&
-                            renderSummary.hasBlueAwardText &&
-                            renderSummary.hasNoDataReportText;
-                        if (!renderedEnough && !renderedNoDataReport) {
-                            const screenshotPath = await this.writeDebugScreenshot(page, submissionId, pageIndex, attempt);
+                        try {
+                            const renderSummary = await this.getRenderSummary(page);
+                            const renderedEnough =
+                                renderSummary.largeIframeCount > 0 &&
+                                (renderSummary.largeVisualCount > 0 || renderSummary.bodyTextLength >= this.blueAwardReportConfig.behavior.minRichTextLength);
+                            const renderedNoDataReport =
+                                renderSummary.bodyTextLength > 50 &&
+                                renderSummary.bodyTextLength < this.blueAwardReportConfig.behavior.minRichTextLength &&
+                                renderSummary.hasBlueAwardText &&
+                                renderSummary.hasNoDataReportText;
+                            if (!renderedEnough && !renderedNoDataReport) {
+                                console.warn(
+                                    `Looker report readiness heuristics were not satisfied for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing with screenshot PDF capture.`,
+                                    {
+                                        url: urlWithParams,
+                                        renderSummary
+                                    }
+                                );
+                            }
+                        } catch (summaryError: any) {
                             console.warn(
-                                `Looker report readiness heuristics were not satisfied for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing with PDF capture.`,
-                                {
-                                    url: urlWithParams,
-                                    screenshotPath,
-                                    renderSummary
-                                }
+                                `Could not inspect Looker report readiness for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing with screenshot PDF capture: ${summaryError?.message || summaryError}`
                             );
                         }
 
-                        const dimensions = await page.evaluate(() => {
-                            const doc = document.documentElement;
-                            const body = document.body;
-                            const docWidth = Math.max(
-                                doc?.scrollWidth || 0,
-                                doc?.clientWidth || 0,
-                                body?.scrollWidth || 0,
-                                body?.clientWidth || 0
-                            );
-                            const docHeight = Math.max(
-                                doc?.scrollHeight || 0,
-                                doc?.clientHeight || 0,
-                                body?.scrollHeight || 0,
-                                body?.clientHeight || 0
-                            );
-                            let visualMinLeft = Number.POSITIVE_INFINITY;
-                            let visualMaxRight = 0;
-                            let visualMaxBottom = 0;
-                            const visualNodes = document.querySelectorAll('canvas, svg, img, iframe');
-                            visualNodes.forEach((node) => {
-                                const rect = (node as Element).getBoundingClientRect();
-                                const left = rect.left + window.scrollX;
-                                const right = rect.right + window.scrollX;
-                                const bottom = rect.bottom + window.scrollY;
-                                if (left < visualMinLeft) visualMinLeft = left;
-                                if (right > visualMaxRight) visualMaxRight = right;
-                                if (bottom > visualMaxBottom) visualMaxBottom = bottom;
-                            });
-                            return {
-                                docWidth,
-                                docHeight,
-                                visualMinLeft: Number.isFinite(visualMinLeft) ? Math.floor(visualMinLeft) : 0,
-                                visualMaxRight: Math.ceil(visualMaxRight),
-                                visualMaxBottom: Math.ceil(visualMaxBottom)
-                            };
-                        });
-                        const horizontalPadding = this.blueAwardReportConfig.behavior.horizontalPadding;
-                        const verticalPadding = this.blueAwardReportConfig.behavior.verticalPadding;
-                        const visualWidth =
-                            dimensions.visualMaxRight > 0
-                                ? Math.max(0, dimensions.visualMaxRight - Math.max(0, dimensions.visualMinLeft))
-                                : 0;
-                        const contentWidth = visualWidth > 0 ? visualWidth : dimensions.docWidth;
-                        const contentHeight =
-                            dimensions.visualMaxBottom > 0
-                                ? dimensions.visualMaxBottom
-                                : dimensions.docHeight;
-                        const baseWidth = Math.max(contentWidth + horizontalPadding, 1);
-                        const baseHeight = Math.max(contentHeight + verticalPadding, 1);
-                        const pdfWidth = Math.min(baseWidth, this.blueAwardReportConfig.pdfLimits.maxWidth);
-                        const pdfHeight = Math.min(baseHeight, this.blueAwardReportConfig.pdfLimits.maxHeight);
-
-                        const rawPdf = await page.pdf({
-                            width: `${pdfWidth}px`,
-                            height: `${pdfHeight}px`,
-                            printBackground: true,
-                            preferCSSPageSize: false,
-                            margin: {
-                                top: '0',
-                                right: '0',
-                                bottom: '0',
-                                left: '0'
-                            }
-                        });
+                        const rawPdf = await this.captureLookerPageAsPdf(page);
                         if (!rawPdf || rawPdf.length < 50000) {
                             const screenshotPath = await this.writeDebugScreenshot(page, submissionId, pageIndex, attempt);
                             console.warn(
-                                `Generated PDF is smaller than expected for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing because Looker rendered a capturable page.`,
+                                `Generated PDF is smaller than expected for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing because Looker rendered a capturable screenshot.`,
                                 {
                                     url: urlWithParams,
                                     rawPdfLength: rawPdf?.length || 0,
@@ -586,30 +561,27 @@ export class ReportService {
                             );
                         }
 
-                        const singlePdf = await PDFDocument.load(Buffer.from(rawPdf));
-                        const leftTrimPx = this.blueAwardReportConfig.trims.left;
-                        const topTrimPx = this.blueAwardReportConfig.trims.top;
-                        const rightTrimPx = this.blueAwardReportConfig.trims.right;
-                        const bottomTrimPx = this.blueAwardReportConfig.trims.bottom;
-                        for (const p of singlePdf.getPages()) {
-                            const { width, height } = p.getSize();
-                            const cropLeft = Math.max(0, Math.min(leftTrimPx, width - 1));
-                            const cropRight = Math.max(0, Math.min(rightTrimPx, width - cropLeft - 1));
-                            const cropTop = Math.max(0, Math.min(topTrimPx, height - 1));
-                            const cropBottom = Math.max(0, Math.min(bottomTrimPx, height - cropTop - 1));
-                            const croppedWidth = Math.max(1, width - cropLeft - cropRight);
-                            const croppedHeight = Math.max(1, height - cropTop - cropBottom);
-                            p.setCropBox(cropLeft, cropBottom, croppedWidth, croppedHeight);
-                            p.setMediaBox(cropLeft, cropBottom, croppedWidth, croppedHeight);
-                        }
-                        pagePdfBuffer = Buffer.from(await singlePdf.save());
+                        pagePdfBuffer = Buffer.from(rawPdf);
                         lastError = null;
                         break;
                     } catch (error: any) {
                         lastError = error;
                         const retryable = this.isRetryableLookerCaptureError(error);
+                        if (retryable && page && !page.isClosed()) {
+                            try {
+                                await this.sleep(1000);
+                                pagePdfBuffer = await this.captureLookerPageAsPdf(page);
+                                console.warn(
+                                    `Captured Looker Studio screenshot PDF after retryable error for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}: ${error?.message || error}`
+                                );
+                                lastError = null;
+                                break;
+                            } catch (fallbackError: any) {
+                                lastError = fallbackError;
+                            }
+                        }
                         if (attempt === this.blueAwardReportConfig.behavior.maxAttempts) {
-                            throw error;
+                            throw lastError || error;
                         }
                         if (!retryable) {
                             throw error;

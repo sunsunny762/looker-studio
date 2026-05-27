@@ -27,6 +27,7 @@ export class SchedulerService implements ISchedulerHostContext {
   //public readonly logger = new Logger(SchedulerService.name);
   private _scheduleFrequencies: Array<ScheduleFrequency> = [];
   private _heartbeatJobs: Array<CronJob> = [];
+  private _intervalJobs: Array<ReturnType<typeof setInterval>> = [];
 
   constructor(
     public readonly jotformService: JotformService, 
@@ -284,20 +285,29 @@ private generateCronJobs(): void {
   const contextHost: ISchedulerHostContext = this;
   this._scheduleFrequencies.forEach(j => {
       const cronDefinition = this.normalizeCronDefinition(j.cronDefinition);
+      const intervalMs = this.getSimpleMinuteIntervalMs(cronDefinition);
+      const runSchedule = async () => {
+          if (j.isProcessing) { return }
+          try {
+              j.isProcessing = true;
+              await contextHost.executeScheduledJobs(j, contextHost);
+          } catch (e) {
+              //contextHost.logger.warn(`Exception ${(<any>e).toString()}`, j, e);
+              console.error(`Exception ${(<any>e).toString()}`, j, e);
+          } finally {
+              j.isProcessing = false;
+          }
+      };
+
+      if (intervalMs) {
+          this._intervalJobs.push(setInterval(runSchedule, intervalMs));
+          console.log(`Started interval job schedule ${j.name} ${j.cronDefinition} every ${intervalMs}ms`);
+          return;
+      }
+
       j.instance = new CronJob(
           cronDefinition,
-          async () => {
-              if (j.isProcessing) { return }
-              try {
-                  j.isProcessing = true;
-                  await contextHost.executeScheduledJobs(j, contextHost);
-              } catch (e) {
-                  //contextHost.logger.warn(`Exception ${(<any>e).toString()}`, j, e);
-                  console.error(`Exception ${(<any>e).toString()}`, j, e);
-              } finally {
-                  j.isProcessing = false;
-              }
-          },
+          runSchedule,
           () => {
               //contextHost.logger.log(`Stopped`, j);
               console.log(`Stopped`, j);
@@ -315,6 +325,29 @@ private normalizeCronDefinition(cronDefinition: string): string {
       return parts.slice(1).join(' ');
   }
   return trimmed;
+}
+
+private getSimpleMinuteIntervalMs(cronDefinition: string): number | null {
+  const parts = String(cronDefinition || '').trim().split(/\s+/);
+  if (parts.length !== 5) {
+      return null;
+  }
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+  if (hour !== '*' || dayOfMonth !== '*' || month !== '*' || dayOfWeek !== '*') {
+      return null;
+  }
+  if (minute === '*' || minute === '*/1') {
+      return 60 * 1000;
+  }
+  const intervalMatch = minute.match(/^\*\/(\d+)$/);
+  if (!intervalMatch) {
+      return null;
+  }
+  const intervalMinutes = Number(intervalMatch[1]);
+  if (!Number.isInteger(intervalMinutes) || intervalMinutes <= 0) {
+      return null;
+  }
+  return intervalMinutes * 60 * 1000;
 }
 
 private async _loadConfig(fullRefresh: boolean = true): Promise<void> {

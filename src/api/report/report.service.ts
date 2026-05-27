@@ -227,6 +227,10 @@ export class ReportService {
                 throw new Error(`Missing required blue-award-report config: ${pathKey}`);
             }
         }
+        const navigationTimeoutOverride = Number(process.env.LOOKER_NAVIGATION_TIMEOUT_MS);
+        if (Number.isFinite(navigationTimeoutOverride) && navigationTimeoutOverride > 0) {
+            parsed.behavior.navigationTimeoutMs = navigationTimeoutOverride;
+        }
         return parsed;
     }
 
@@ -256,6 +260,34 @@ export class ReportService {
 
     private async sleep(ms: number): Promise<void> {
         await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    private async createLookerCapturePage(browser: any): Promise<any> {
+        const page = await browser.newPage();
+        const navigationTimeoutMs = this.blueAwardReportConfig.behavior.navigationTimeoutMs;
+        page.setDefaultNavigationTimeout(navigationTimeoutMs);
+        page.setDefaultTimeout(Math.max(navigationTimeoutMs, this.lookerCaptureReadyTimeoutMs));
+        await page.setViewport({
+            width: this.blueAwardReportConfig.viewport.width,
+            height: this.blueAwardReportConfig.viewport.height,
+            deviceScaleFactor: this.blueAwardReportConfig.viewport.deviceScaleFactor
+        });
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'en-US,en;q=0.9'
+        });
+        return page;
+    }
+
+    private isRetryableLookerCaptureError(error: any): boolean {
+        const message = String(error?.message || error || '').toLowerCase();
+        return (
+            message.includes('navigation timeout') ||
+            message.includes('detached frame') ||
+            message.includes('frame was detached') ||
+            message.includes('target closed') ||
+            message.includes('execution context was destroyed') ||
+            message.includes('navigating frame was detached')
+        );
     }
 
     private async waitForReportContent(page: any): Promise<boolean> {
@@ -435,23 +467,15 @@ export class ReportService {
         }
 
         try {
-            const page = await browser.newPage();
-            await page.setViewport({
-                width: this.blueAwardReportConfig.viewport.width,
-                height: this.blueAwardReportConfig.viewport.height,
-                deviceScaleFactor: this.blueAwardReportConfig.viewport.deviceScaleFactor
-            });
-            await page.setExtraHTTPHeaders({
-                'Accept-Language': 'en-US,en;q=0.9'
-            });
-
             const pagePdfBuffers: Buffer[] = [];
             for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
                 const urlWithParams = this.buildLookerStudioPageUrlWithSubmissionId(pages[pageIndex], submissionId, reportCompanyName);
                 let lastError: any;
                 let pagePdfBuffer: Buffer | null = null;
                 for (let attempt = 1; attempt <= this.blueAwardReportConfig.behavior.maxAttempts; attempt++) {
+                    let page: any;
                     try {
+                        page = await this.createLookerCapturePage(browser);
                         await page.goto(urlWithParams, {
                             waitUntil: this.blueAwardReportConfig.render.gotoWaitUntil as any,
                             timeout: this.blueAwardReportConfig.behavior.navigationTimeoutMs
@@ -583,10 +607,21 @@ export class ReportService {
                         break;
                     } catch (error: any) {
                         lastError = error;
+                        const retryable = this.isRetryableLookerCaptureError(error);
                         if (attempt === this.blueAwardReportConfig.behavior.maxAttempts) {
                             throw error;
                         }
+                        if (!retryable) {
+                            throw error;
+                        }
+                        console.warn(
+                            `Retrying Looker Studio capture for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt} after retryable error: ${error?.message || error}`
+                        );
                         await this.sleep(this.blueAwardReportConfig.behavior.retryDelayMs);
+                    } finally {
+                        if (page) {
+                            await page.close().catch(() => undefined);
+                        }
                     }
                 }
                 if (lastError || !pagePdfBuffer) {

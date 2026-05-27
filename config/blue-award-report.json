@@ -44,7 +44,7 @@
     "minRichTextLength": 200,
     "minIframeWidth": 600,
     "minIframeHeight": 600,
-    "navigationTimeoutMs": 180000,
+    "navigationTimeoutMs": 240000,
     "maxAttempts": 4,
     "retryDelayMs": 3000,
     "horizontalPadding": 0,
@@ -54,6 +54,8 @@
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--no-zygote",
       "--disable-blink-features=AutomationControlled"
     ]
   }

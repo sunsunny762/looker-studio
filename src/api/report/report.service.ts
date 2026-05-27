@@ -359,6 +359,16 @@ export class ReportService {
         return Math.min(pageCount, safeConfigured);
     }
 
+    private getRemoteBrowserWsEndpoint(): string | undefined {
+        const endpoint = String(
+            process.env.PUPPETEER_BROWSER_WS_ENDPOINT ||
+            process.env.BROWSERLESS_WS_ENDPOINT ||
+            process.env.LOOKER_PUPPETEER_WS_ENDPOINT ||
+            ''
+        ).trim();
+        return endpoint || undefined;
+    }
+
     private async waitForReportContent(page: any): Promise<boolean> {
         const behavior = this.blueAwardReportConfig.behavior;
         try {
@@ -613,26 +623,37 @@ export class ReportService {
         const pages = (pageUrls && pageUrls.length > 0) ? pageUrls : this.defaultBlueAwardPageUrls;
         const reportCompanyName = String(companyName || '').trim() || await this.resolveBlueAwardCompanyName(submissionId);
         let browser: any;
+        let connectedToRemoteBrowser = false;
         const reportStartedAt = Date.now();
         try {
             // Runtime-load puppeteer so deploys fail at request time with a clear message if the browser is missing.
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             const puppeteer = require('puppeteer-core');
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const chromium = require('@sparticuz/chromium');
-            const { executablePath, isSparticuz } = await this.resolvePuppeteerExecutablePath(chromium);
-            const browserArgs = Array.from(new Set([
-                ...(isSparticuz ? chromium.args : []),
-                ...this.blueAwardReportConfig.behavior.browserArgs
-            ]));
+            const remoteBrowserWsEndpoint = this.getRemoteBrowserWsEndpoint();
             const launchTimeoutMs = Number(process.env.LOOKER_PUPPETEER_LAUNCH_TIMEOUT_MS || 180000);
-            browser = await puppeteer.launch({
-                headless: this.blueAwardReportConfig.behavior.browserHeadless ?? chromium.headless,
-                timeout: launchTimeoutMs,
-                protocolTimeout: launchTimeoutMs,
-                ...(executablePath ? { executablePath } : {}),
-                args: browserArgs
-            });
+            if (remoteBrowserWsEndpoint) {
+                browser = await puppeteer.connect({
+                    browserWSEndpoint: remoteBrowserWsEndpoint,
+                    protocolTimeout: launchTimeoutMs
+                });
+                connectedToRemoteBrowser = true;
+                console.log('Connected to remote Puppeteer browser for Blue Award report generation.');
+            } else {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const chromium = require('@sparticuz/chromium');
+                const { executablePath, isSparticuz } = await this.resolvePuppeteerExecutablePath(chromium);
+                const browserArgs = Array.from(new Set([
+                    ...(isSparticuz ? chromium.args : []),
+                    ...this.blueAwardReportConfig.behavior.browserArgs
+                ]));
+                browser = await puppeteer.launch({
+                    headless: this.blueAwardReportConfig.behavior.browserHeadless ?? chromium.headless,
+                    timeout: launchTimeoutMs,
+                    protocolTimeout: launchTimeoutMs,
+                    ...(executablePath ? { executablePath } : {}),
+                    args: browserArgs
+                });
+            }
         } catch (error) {
             console.error('Failed to launch Puppeteer for Blue Award report generation.', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -673,7 +694,11 @@ export class ReportService {
             throw new BadGatewayException(`Failed to generate merged Looker Studio PDF: ${error?.message || 'unknown error'}`);
         } finally {
             if (browser) {
-                await browser.close();
+                if (connectedToRemoteBrowser) {
+                    browser.disconnect();
+                } else {
+                    await browser.close();
+                }
             }
         }
     }

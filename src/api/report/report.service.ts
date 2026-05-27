@@ -231,6 +231,18 @@ export class ReportService {
         if (Number.isFinite(navigationTimeoutOverride) && navigationTimeoutOverride > 0) {
             parsed.behavior.navigationTimeoutMs = navigationTimeoutOverride;
         }
+        const postLoadDelayOverride = Number(process.env.LOOKER_POST_LOAD_DELAY_MS);
+        if (Number.isFinite(postLoadDelayOverride) && postLoadDelayOverride >= 0) {
+            parsed.lookerPostLoadDelayMs = postLoadDelayOverride;
+        }
+        const maxAttemptsOverride = Number(process.env.LOOKER_MAX_ATTEMPTS);
+        if (Number.isInteger(maxAttemptsOverride) && maxAttemptsOverride > 0) {
+            parsed.behavior.maxAttempts = maxAttemptsOverride;
+        }
+        const captureConcurrencyOverride = Number(process.env.LOOKER_CAPTURE_CONCURRENCY);
+        if (Number.isInteger(captureConcurrencyOverride) && captureConcurrencyOverride > 0) {
+            parsed.behavior.captureConcurrency = captureConcurrencyOverride;
+        }
         return parsed;
     }
 
@@ -286,7 +298,14 @@ export class ReportService {
             message.includes('frame was detached') ||
             message.includes('target closed') ||
             message.includes('execution context was destroyed') ||
-            message.includes('navigating frame was detached')
+            message.includes('navigating frame was detached') ||
+            message.includes('net::err_socket_not_connected') ||
+            message.includes('net::err_connection_reset') ||
+            message.includes('net::err_connection_closed') ||
+            message.includes('net::err_connection_timed_out') ||
+            message.includes('net::err_timed_out') ||
+            message.includes('net::err_network_changed') ||
+            message.includes('net::err_internet_disconnected')
         );
     }
 
@@ -322,6 +341,12 @@ export class ReportService {
         });
 
         return Buffer.from(await pdf.save());
+    }
+
+    private getLookerCaptureConcurrency(pageCount: number): number {
+        const configured = Number(this.blueAwardReportConfig.behavior.captureConcurrency || 1);
+        const safeConfigured = Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 1;
+        return Math.min(pageCount, safeConfigured);
     }
 
     private async waitForReportContent(page: any): Promise<boolean> {
@@ -467,6 +492,108 @@ export class ReportService {
         return parsedUrl.toString();
     }
 
+    private async captureBlueAwardLookerPagePdf(
+        browser: any,
+        pageUrl: string,
+        submissionId: number,
+        reportCompanyName: string | undefined,
+        pageIndex: number
+    ): Promise<Buffer> {
+        const urlWithParams = this.buildLookerStudioPageUrlWithSubmissionId(pageUrl, submissionId, reportCompanyName);
+        let lastError: any;
+        for (let attempt = 1; attempt <= this.blueAwardReportConfig.behavior.maxAttempts; attempt++) {
+            let page: any;
+            const attemptStartedAt = Date.now();
+            try {
+                console.log(`Blue Award capture loading submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}`);
+                page = await this.createLookerCapturePage(browser);
+                await page.goto(urlWithParams, {
+                    waitUntil: this.blueAwardReportConfig.render.gotoWaitUntil as any,
+                    timeout: this.blueAwardReportConfig.behavior.navigationTimeoutMs
+                });
+                const accessIssue = await this.detectAccessIssue(page);
+                if (accessIssue) {
+                    throw new Error(`Access blocked: ${accessIssue}`);
+                }
+                await this.waitForReportContent(page);
+                await page.evaluate(() => window.scrollTo(0, 0));
+                await this.sleep(this.lookerPostLoadDelayMs);
+                await page.emulateMediaType(this.blueAwardReportConfig.render.emulateMediaType as any);
+
+                try {
+                    const renderSummary = await this.getRenderSummary(page);
+                    const renderedEnough =
+                        renderSummary.largeIframeCount > 0 &&
+                        (renderSummary.largeVisualCount > 0 || renderSummary.bodyTextLength >= this.blueAwardReportConfig.behavior.minRichTextLength);
+                    const renderedNoDataReport =
+                        renderSummary.bodyTextLength > 50 &&
+                        renderSummary.bodyTextLength < this.blueAwardReportConfig.behavior.minRichTextLength &&
+                        renderSummary.hasBlueAwardText &&
+                        renderSummary.hasNoDataReportText;
+                    if (!renderedEnough && !renderedNoDataReport) {
+                        console.warn(
+                            `Looker report readiness heuristics were not satisfied for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing with screenshot PDF capture.`,
+                            {
+                                url: urlWithParams,
+                                renderSummary
+                            }
+                        );
+                    }
+                } catch (summaryError: any) {
+                    console.warn(
+                        `Could not inspect Looker report readiness for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing with screenshot PDF capture: ${summaryError?.message || summaryError}`
+                    );
+                }
+
+                const rawPdf = await this.captureLookerPageAsPdf(page);
+                if (!rawPdf || rawPdf.length < 50000) {
+                    const screenshotPath = await this.writeDebugScreenshot(page, submissionId, pageIndex, attempt);
+                    console.warn(
+                        `Generated PDF is smaller than expected for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing because Looker rendered a capturable screenshot.`,
+                        {
+                            url: urlWithParams,
+                            rawPdfLength: rawPdf?.length || 0,
+                            screenshotPath
+                        }
+                    );
+                }
+
+                console.log(`Blue Award capture completed submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}, durationMs=${Date.now() - attemptStartedAt}`);
+                return Buffer.from(rawPdf);
+            } catch (error: any) {
+                lastError = error;
+                const retryable = this.isRetryableLookerCaptureError(error);
+                if (retryable && page && !page.isClosed()) {
+                    try {
+                        await this.sleep(1000);
+                        const fallbackPdf = await this.captureLookerPageAsPdf(page);
+                        console.warn(
+                            `Captured Looker Studio screenshot PDF after retryable error for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}, durationMs=${Date.now() - attemptStartedAt}: ${error?.message || error}`
+                        );
+                        return fallbackPdf;
+                    } catch (fallbackError: any) {
+                        lastError = fallbackError;
+                    }
+                }
+                if (attempt === this.blueAwardReportConfig.behavior.maxAttempts) {
+                    throw lastError || error;
+                }
+                if (!retryable) {
+                    throw error;
+                }
+                console.warn(
+                    `Retrying Looker Studio capture for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt} after retryable error: ${error?.message || error}`
+                );
+                await this.sleep(this.blueAwardReportConfig.behavior.retryDelayMs);
+            } finally {
+                if (page) {
+                    await page.close().catch(() => undefined);
+                }
+            }
+        }
+        throw lastError;
+    }
+
     public async downloadMergedBlueAwardLookerStudioPdf(submissionId: number, pageUrls?: string[], companyName?: string): Promise<Buffer> {
         if (!Number.isInteger(submissionId) || submissionId <= 0) {
             throw new BadRequestException('submissionId must be a positive integer');
@@ -475,6 +602,7 @@ export class ReportService {
         const pages = (pageUrls && pageUrls.length > 0) ? pageUrls : this.defaultBlueAwardPageUrls;
         const reportCompanyName = String(companyName || '').trim() || await this.resolveBlueAwardCompanyName(submissionId);
         let browser: any;
+        const reportStartedAt = Date.now();
         try {
             // Runtime-load puppeteer so deploys fail at request time with a clear message if the browser is missing.
             // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -501,106 +629,23 @@ export class ReportService {
         }
 
         try {
-            const pagePdfBuffers: Buffer[] = [];
-            for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
-                const urlWithParams = this.buildLookerStudioPageUrlWithSubmissionId(pages[pageIndex], submissionId, reportCompanyName);
-                let lastError: any;
-                let pagePdfBuffer: Buffer | null = null;
-                for (let attempt = 1; attempt <= this.blueAwardReportConfig.behavior.maxAttempts; attempt++) {
-                    let page: any;
-                    try {
-                        page = await this.createLookerCapturePage(browser);
-                        await page.goto(urlWithParams, {
-                            waitUntil: this.blueAwardReportConfig.render.gotoWaitUntil as any,
-                            timeout: this.blueAwardReportConfig.behavior.navigationTimeoutMs
-                        });
-                        const accessIssue = await this.detectAccessIssue(page);
-                        if (accessIssue) {
-                            throw new Error(`Access blocked: ${accessIssue}`);
-                        }
-                        await this.waitForReportContent(page);
-                        await page.evaluate(() => window.scrollTo(0, 0));
-                        await this.sleep(this.lookerPostLoadDelayMs);
-                        await page.emulateMediaType(this.blueAwardReportConfig.render.emulateMediaType as any);
-
-                        try {
-                            const renderSummary = await this.getRenderSummary(page);
-                            const renderedEnough =
-                                renderSummary.largeIframeCount > 0 &&
-                                (renderSummary.largeVisualCount > 0 || renderSummary.bodyTextLength >= this.blueAwardReportConfig.behavior.minRichTextLength);
-                            const renderedNoDataReport =
-                                renderSummary.bodyTextLength > 50 &&
-                                renderSummary.bodyTextLength < this.blueAwardReportConfig.behavior.minRichTextLength &&
-                                renderSummary.hasBlueAwardText &&
-                                renderSummary.hasNoDataReportText;
-                            if (!renderedEnough && !renderedNoDataReport) {
-                                console.warn(
-                                    `Looker report readiness heuristics were not satisfied for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing with screenshot PDF capture.`,
-                                    {
-                                        url: urlWithParams,
-                                        renderSummary
-                                    }
-                                );
-                            }
-                        } catch (summaryError: any) {
-                            console.warn(
-                                `Could not inspect Looker report readiness for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing with screenshot PDF capture: ${summaryError?.message || summaryError}`
-                            );
-                        }
-
-                        const rawPdf = await this.captureLookerPageAsPdf(page);
-                        if (!rawPdf || rawPdf.length < 50000) {
-                            const screenshotPath = await this.writeDebugScreenshot(page, submissionId, pageIndex, attempt);
-                            console.warn(
-                                `Generated PDF is smaller than expected for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}; continuing because Looker rendered a capturable screenshot.`,
-                                {
-                                    url: urlWithParams,
-                                    rawPdfLength: rawPdf?.length || 0,
-                                    screenshotPath
-                                }
-                            );
-                        }
-
-                        pagePdfBuffer = Buffer.from(rawPdf);
-                        lastError = null;
-                        break;
-                    } catch (error: any) {
-                        lastError = error;
-                        const retryable = this.isRetryableLookerCaptureError(error);
-                        if (retryable && page && !page.isClosed()) {
-                            try {
-                                await this.sleep(1000);
-                                pagePdfBuffer = await this.captureLookerPageAsPdf(page);
-                                console.warn(
-                                    `Captured Looker Studio screenshot PDF after retryable error for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt}: ${error?.message || error}`
-                                );
-                                lastError = null;
-                                break;
-                            } catch (fallbackError: any) {
-                                lastError = fallbackError;
-                            }
-                        }
-                        if (attempt === this.blueAwardReportConfig.behavior.maxAttempts) {
-                            throw lastError || error;
-                        }
-                        if (!retryable) {
-                            throw error;
-                        }
-                        console.warn(
-                            `Retrying Looker Studio capture for submissionId=${submissionId}, page=${pageIndex + 1}, attempt=${attempt} after retryable error: ${error?.message || error}`
-                        );
-                        await this.sleep(this.blueAwardReportConfig.behavior.retryDelayMs);
-                    } finally {
-                        if (page) {
-                            await page.close().catch(() => undefined);
-                        }
-                    }
+            const pagePdfBuffers = new Array<Buffer>(pages.length);
+            const concurrency = this.getLookerCaptureConcurrency(pages.length);
+            console.log(`Blue Award capture started submissionId=${submissionId}, pages=${pages.length}, concurrency=${concurrency}`);
+            let nextPageIndex = 0;
+            const workers = Array.from({ length: concurrency }, async () => {
+                while (nextPageIndex < pages.length) {
+                    const pageIndex = nextPageIndex++;
+                    pagePdfBuffers[pageIndex] = await this.captureBlueAwardLookerPagePdf(
+                        browser,
+                        pages[pageIndex],
+                        submissionId,
+                        reportCompanyName,
+                        pageIndex
+                    );
                 }
-                if (lastError || !pagePdfBuffer) {
-                    throw lastError;
-                }
-                pagePdfBuffers.push(pagePdfBuffer);
-            }
+            });
+            await Promise.all(workers);
 
             const mergedPdf = await PDFDocument.create();
             for (const pagePdfBuffer of pagePdfBuffers) {
@@ -610,7 +655,9 @@ export class ReportService {
                     mergedPdf.addPage(copiedPage);
                 }
             }
-            return Buffer.from(await mergedPdf.save());
+            const mergedBuffer = Buffer.from(await mergedPdf.save());
+            console.log(`Blue Award capture merged submissionId=${submissionId}, pages=${pages.length}, durationMs=${Date.now() - reportStartedAt}, bytes=${mergedBuffer.length}`);
+            return mergedBuffer;
         } catch (error: any) {
             throw new BadGatewayException(`Failed to generate merged Looker Studio PDF: ${error?.message || 'unknown error'}`);
         } finally {

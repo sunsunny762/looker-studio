@@ -1,32 +1,20 @@
 FROM node:20-bookworm-slim AS build
 
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --legacy-peer-deps
+RUN npm install --force 
 
-COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY tsconfig.json nest-cli.json ./
 COPY src ./src
 RUN npm run build
 
 FROM node:20-bookworm-slim
 
 ENV NODE_ENV=staging
-ENV PORT=8080
+ENV PORT=3000
 ENV LOOKER_PUPPETEER_HEADLESS=true
 ENV LOOKER_PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV CHROME_BIN=/usr/bin/chromium
-ENV LOOKER_PUPPETEER_LAUNCH_TIMEOUT_MS=180000
-ENV LOOKER_NAVIGATION_TIMEOUT_MS=120000
-ENV LOOKER_CAPTURE_CONCURRENCY=2
-ENV LOOKER_POST_LOAD_DELAY_MS=3500
-ENV LOOKER_MAX_ATTEMPTS=2
-ENV LOOKER_ACTION_TIMEOUT_MS=60000
 
 WORKDIR /app
 
@@ -36,19 +24,17 @@ RUN apt-get update \
     fonts-liberation \
     fonts-noto-color-emoji \
     ca-certificates \
-    xz-utils \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir -p data uploads logs
 
 COPY package*.json ./
-RUN npm install --omit=dev --include=optional --legacy-peer-deps \
-  && npm install --no-save --include=optional --legacy-peer-deps --os=linux --cpu=x64 sharp@0.33.5 \
-  && node -e "require('sharp'); console.log('sharp linux-x64 ok')" \
-  && chromium --version
+RUN npm install --omit=dev --force \
+  && npm run install:browser --force
 
 COPY --from=build /app/dist ./dist
 COPY config ./config
+COPY firebase ./firebase
 
-EXPOSE 8080
+EXPOSE 3000
 
 CMD ["node", "dist/main.js"]

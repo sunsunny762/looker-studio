@@ -46,7 +46,8 @@
       {"name": "BAQ uniqueId (dep)", "id": "938B6F99-7B59-4BE3-9C78-8D43A032D17F"},
       {"name": "BAQ uniqueId", "id": "3a5f03a7-0840-430b-ad45-6c93ac0f2fa6"},
       {"name": "Company in Certification Relationship", "id": "69115b92-8bea-4cbc-8773-ab5875423918"},
-      {"name": "Person in Certification Relationship", "id": "8d83f152-0d4e-4cce-b32d-29ab6a6fb6f3"}
+      {"name": "Person in Certification Relationship", "id": "8d83f152-0d4e-4cce-b32d-29ab6a6fb6f3"},
+      {"name": "Blue Lead Source", "id": "71380f63-2dc9-475e-a981-00ad99b083b6"}
     ],
     "products":[
       {"name": "Blue Award", "id": "64221220-e2f4-4c18-bce1-8aba80b7451c"},

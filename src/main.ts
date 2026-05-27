@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import * as dotenv from "dotenv";
+import { FirebaseService } from './firebase.service';
 import { SchedulerService } from './scheduler';
 import { UtilitiesService } from './utilities/utilities.service';
 import { DatabaseService } from './database';

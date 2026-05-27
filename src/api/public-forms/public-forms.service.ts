@@ -2,12 +2,27 @@ import { Injectable } from '@nestjs/common';
 import * as mssql from 'mssql';
 import { DatabaseService } from '../../database';
 import { ErrorLoggerService } from '../../error-logger/error-logger.service';
+import { DocumentsService } from '../../documents/documents.service';
+
+export interface PublicFormSubmissionDocumentDownloadItem {
+    documentKey: string;
+    psubmissionId: number;
+    dimFormId: number;
+    submissionId: number;
+    formName: string;
+    question: string;
+    documentName: string;
+    documentId: number;
+    container: string;
+    blobName: string;
+}
 
 @Injectable()
 export class PublicFormsService {
     constructor(
         private readonly databaseService: DatabaseService,
         private readonly errorLoggerService: ErrorLoggerService,
+        private readonly documentsService: DocumentsService,
     ) {}
 
     // ── Forms ────────────────────────────────────────────────────────────────
@@ -88,6 +103,89 @@ export class PublicFormsService {
             { name: 'psubmissionId', type: mssql.TYPES.Int,      value: psubmissionId },
             { name: 'deleteNotes',   type: mssql.TYPES.NVarChar, value: deleteNotes },
         ]);
+    }
+
+    async getSubmissionDocuments(dimFormId: number, psubmissionId: number): Promise<PublicFormSubmissionDocumentDownloadItem[]> {
+        const query = await this.databaseService.execute('[portal].[spPublicFormSubmissionDocuments_Get]', [
+            { name: 'dimFormId', type: mssql.TYPES.Int, value: dimFormId },
+            { name: 'psubmissionId', type: mssql.TYPES.Int, value: psubmissionId },
+        ]);
+
+        return (query.results || []).map((item: any) => {
+            const normalizedDimFormId = Number(item.dimFormId);
+            const normalizedSubmissionId = Number(item.psubmissionId);
+            const normalizedDocumentId = Number(item.documentId);
+            return {
+                documentKey: `PUBLIC:${normalizedDimFormId}:${normalizedSubmissionId}:${normalizedDocumentId}`,
+                psubmissionId: normalizedSubmissionId,
+                dimFormId: normalizedDimFormId,
+                submissionId: Number(item.submissionId),
+                formName: String(item.formName ?? ''),
+                question: String(item.question ?? ''),
+                documentName: String(item.documentName ?? ''),
+                documentId: normalizedDocumentId,
+                container: String(item.container ?? ''),
+                blobName: String(item.blobName ?? ''),
+            } as PublicFormSubmissionDocumentDownloadItem;
+        }).filter((item) => Boolean(item.documentId && item.container && item.blobName));
+    }
+
+    async getSubmissionDocumentsForZip(dimFormId: number, psubmissionIds: number[]): Promise<PublicFormSubmissionDocumentDownloadItem[]> {
+        const uniqueSubmissionIds = Array.from(
+            new Set(
+                (psubmissionIds || [])
+                    .map((value) => Number(value))
+                    .filter((value) => Number.isInteger(value) && value > 0),
+            ),
+        );
+
+        const documents: PublicFormSubmissionDocumentDownloadItem[] = [];
+        for (const psubmissionId of uniqueSubmissionIds) {
+            const submissionDocuments = await this.getSubmissionDocuments(dimFormId, psubmissionId);
+            documents.push(...submissionDocuments);
+        }
+
+        return documents;
+    }
+
+    async downloadSubmissionDocument(document: PublicFormSubmissionDocumentDownloadItem): Promise<Buffer> {
+        return this.documentsService.downloadFile(document.blobName, document.container);
+    }
+
+    getZipEntryName(document: PublicFormSubmissionDocumentDownloadItem, usedNames: Set<string>): string {
+        const parts = [
+            document.formName,
+            `submission-${document.psubmissionId}`,
+            document.question,
+            this.getDownloadFileName(document),
+        ]
+            .map((part) => this.sanitizeZipPathSegment(part))
+            .filter((part) => Boolean(part));
+
+        const fallbackName = this.sanitizeZipPathSegment(this.getDownloadFileName(document)) || 'document';
+        const baseName = parts.length ? parts.join('/') : fallbackName;
+        let candidate = baseName;
+        let index = 2;
+
+        while (usedNames.has(candidate)) {
+            candidate = `${baseName}-${index}`;
+            index += 1;
+        }
+
+        usedNames.add(candidate);
+        return candidate;
+    }
+
+    private getDownloadFileName(document: PublicFormSubmissionDocumentDownloadItem): string {
+        const documentName = String(document?.documentName ?? '').trim();
+        return documentName || `document-${document.documentId}`;
+    }
+
+    private sanitizeZipPathSegment(value: string): string {
+        return String(value ?? '')
+            .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 }
 

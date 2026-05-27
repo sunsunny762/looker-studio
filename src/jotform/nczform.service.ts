@@ -474,7 +474,7 @@ export class NCZFormService { // For Portal, NCZ Forms
             jsonObj['BAQ_YourName'] || '',
             jsonObj['BAQ_JobTitle'] || '',
             buildDate,
-            dimFormId, dimSubmissionId
+            dimFormId, dimSubmissionId, jsonObj['BAQ_source']
         );
 
         if (resClickupTask.success && resClickupTask.data?.id) {
@@ -757,7 +757,7 @@ export class NCZFormService { // For Portal, NCZ Forms
   }
   public async _createPortalCertificationTask(progId: number, companyName: string, refNumber: string,
     phone: string, email: string, contactName: string, contactTitle: string, contractStartDate: any,
-    formId?: number, submissionId?: number)
+    formId?: number, submissionId?: number, source?: string)
   { // Certification Task to be created when Certification record is created.
     // Later update SubmissionID, FormID etc details on Company profile submission processing
     let awardType;
@@ -813,6 +813,9 @@ export class NCZFormService { // For Portal, NCZ Forms
           },
           { id: this.customFieldsConstants.findConstantIdbyName(CustomFieldsConstantTypes.CustomField,"submissionId"),
             value: submissionId ? submissionId.toString() : ''
+          },
+          { id: this.customFieldsConstants.findConstantIdbyName(CustomFieldsConstantTypes.CustomField,"Blue Lead Source"),
+            value: source ?? '' // used to get the source of the submission
           }
         );
       }

@@ -38,18 +38,6 @@ export class StripePaymentGateway implements IPaymentGateway {
       quantity: item.quantity,
     }));
 
-    // If there is a discount, add a negative line item so the total matches
-    if (params.discountAmount > 0) {
-      lineItems.push({
-        price_data: {
-          currency: params.currency.toLowerCase(),
-          product_data: { name: 'Discount' },
-          unit_amount: -params.discountAmount,
-        },
-        quantity: 1,
-      });
-    }
-
     // If there is tax, add it as a separate line item so the Stripe total matches
     if (params.taxAmount > 0) {
       lineItems.push({
@@ -62,7 +50,10 @@ export class StripePaymentGateway implements IPaymentGateway {
       });
     }
 
-    const session = await this.stripe.checkout.sessions.create({
+    // Stripe requires unit_amount to be a non-negative integer, so discounts
+    // cannot be expressed as negative line items. Create a one-time coupon
+    // instead and attach it via the discounts array.
+    const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: 'payment',
       payment_method_types: ['card'],
       line_items: lineItems,
@@ -76,7 +67,18 @@ export class StripePaymentGateway implements IPaymentGateway {
         cartConfigId: String(params.cartConfigId),
         ...params.metadata,
       },
-    });
+    };
+
+    if (params.discountAmount > 0) {
+      const coupon = await this.stripe.coupons.create({
+        amount_off: params.discountAmount,
+        currency: params.currency.toLowerCase(),
+        duration: 'once',
+      });
+      sessionParams.discounts = [{ coupon: coupon.id }];
+    }
+
+    const session = await this.stripe.checkout.sessions.create(sessionParams);
 
     return { sessionId: session.id, sessionUrl: session.url! };
   }

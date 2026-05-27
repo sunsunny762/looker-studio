@@ -143,8 +143,7 @@ export class SupplyChainService {
   ): Promise<any> {
     try {
       const fileExtension = file.originalname.split('.').pop()?.toLowerCase();
-      const requiredColumns = ['Company Name', 'Person Name', 'Person Email'];
-      const optionalColumns = ['Person Phone', 'Industry', 'Spend'];
+      const requiredColumns = ['Company Name', 'Person Name'];
       let records: any[] = [];
 
       if (fileExtension === 'csv') {
@@ -169,27 +168,14 @@ export class SupplyChainService {
         throw new BadRequestException(`Missing required columns: ${missingColumns.join(', ')}`);
       }
 
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      const phoneRegex = /^[0-9+\-() ]{7,20}$/;
-
       for (const [index, record] of records.entries()) {
         const companyName = String(record['Company Name'] || '').trim();
         const personName = String(record['Person Name'] || '').trim();
-        const personEmail = String(record['Person Email'] || '').trim();
-        const personPhone = record['Person Phone'] ? record['Person Phone']: null;
 
-        if (!companyName || !personName || !personEmail) {
+        if (!companyName || !personName) {
           throw new BadRequestException(
-            `Row ${index + 1}: Missing required data (Company Name, Person Name, Person Email)`,
+            `Row ${index + 1}: Missing required data (Company Name, Person Name)`,
           );
-        }
-
-        if (!emailRegex.test(personEmail)) {
-          throw new BadRequestException(`Row ${index + 1}: Invalid email (${personEmail})`);
-        }
-
-        if (personPhone && !phoneRegex.test(personPhone)) {
-          throw new BadRequestException(`Row ${index + 1}: Invalid phone (${personPhone})`);
         }
 
       }
@@ -198,10 +184,11 @@ export class SupplyChainService {
       for (const record of records) {
         const companyName = this.toSafeString(record['Company Name']);
         const name = this.toSafeString(record['Person Name']);
-        const email = this.toSafeString(record['Person Email']);
-        const phone = this.toSafeString(record['Person Phone']);
+        const email = this.toSafeString(record['Person Email']) ?? '';
+        const phone = this.toSafeString(record['Person Phone']) ?? '';
         const industry = this.toSafeString(record['Industry']);
         const spend = this.toSafeString(record['Spend']);
+        const isMissing = this.getSupplierMissingFlag(email, phone);
 
         const query = await this.databaseService.execute('[portal].[spSupplier_Save]', [
           { name: 'supplierId', type: mssql.TYPES.Int,      value: null },
@@ -213,6 +200,7 @@ export class SupplyChainService {
           { name: 'industry',   type: mssql.TYPES.NVarChar, value: industry },
           { name: 'spend',      type: mssql.TYPES.NVarChar, value: spend },
           { name: 'certId',     type: mssql.TYPES.Int,      value: body.certId ? parseInt(body.certId) : null },
+          { name: 'isMissing',  type: mssql.TYPES.Bit,      value: isMissing },
         ]);
 
         const result = query.results?.[0] || {};
@@ -223,6 +211,7 @@ export class SupplyChainService {
           phone,
           industry,
           spend,
+          isMissing,
           action: result.Action || 'Unknown',
           supplierId: result.supplierId || null,
         });
@@ -271,6 +260,29 @@ export class SupplyChainService {
     return results;
   }
 
+  public async saveSupplier(body: any): Promise<any> {
+    const supplierId = body.supplierId ? parseInt(body.supplierId, 10) : null;
+    const companyId = body.companyId ? parseInt(body.companyId, 10) : null;
+    const email = this.toSafeString(body.email) ?? '';
+    const phone = this.toSafeString(body.phone) ?? '';
+    const isMissing = this.getSupplierMissingFlag(email, phone);
+
+    const query = await this.databaseService.execute('[portal].[spSupplier_Save]', [
+      { name: 'supplierId', type: mssql.TYPES.Int,      value: supplierId },
+      { name: 'companyId',  type: mssql.TYPES.Int,      value: companyId },
+      { name: 'companyName',type: mssql.TYPES.NVarChar, value: this.toSafeString(body.companyName) },
+      { name: 'name',       type: mssql.TYPES.NVarChar, value: this.toSafeString(body.name) ?? '' },
+      { name: 'email',      type: mssql.TYPES.NVarChar, value: email },
+      { name: 'phone',      type: mssql.TYPES.NVarChar, value: phone },
+      { name: 'industry',   type: mssql.TYPES.NVarChar, value: this.toSafeString(body.industry) },
+      { name: 'spend',      type: mssql.TYPES.NVarChar, value: this.toSafeString(body.spend) },
+      { name: 'certId',     type: mssql.TYPES.Int,      value: body.certId ? parseInt(body.certId, 10) : null },
+      { name: 'isMissing',  type: mssql.TYPES.Bit,      value: isMissing },
+    ]);
+
+    return query.results;
+  }
+
   private toSafeString(value: any): string | null {
     if (value === null || value === undefined || value === '') return null;
 
@@ -281,5 +293,16 @@ export class SupplyChainService {
     if (str.toLowerCase() === 'undefined') return null;
 
     return str;
+  }
+
+  private getSupplierMissingFlag(email: string, phone: string): number {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const phoneRegex = /^[0-9+\-() ]{7,20}$/;
+
+    if (!email || !phone) return 1;
+    if (!emailRegex.test(email)) return 1;
+    if (!phoneRegex.test(phone)) return 1;
+
+    return 0;
   }
 }

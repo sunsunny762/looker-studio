@@ -42,6 +42,15 @@ export class SupplyChainController {
     }
   }
 
+  @Post('/suppliers/save')
+  async saveSupplier(@Body() body: any): Promise<any> {
+    try {
+      return await this.supplyChainService.saveSupplier(body);
+    } catch (error) {
+      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   @Get('documents/download/:documentId')
   async downloadFile(@Param('documentId') documentId: number, @Res() res: Response) {
     const fileResult = await this.supplyChainService.getDocumentDownload(documentId);

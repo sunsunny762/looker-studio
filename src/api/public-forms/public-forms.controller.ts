@@ -10,9 +10,12 @@ import {
     Post,
     Put,
     Query,
+    Res,
 } from '@nestjs/common';
 import { PublicFormsService } from './public-forms.service';
 import { ErrorLoggerService } from '../../error-logger/error-logger.service';
+import { Response } from 'express';
+import * as archiver from 'archiver';
 
 @Controller('public-forms')
 export class PublicFormsController {
@@ -27,7 +30,7 @@ export class PublicFormsController {
     async getForms(): Promise<any> {
         try {
             return await this.publicFormsService.getForms();
-        } catch (error) {
+        } catch (error:any) {
             await this.errorLoggerService.writeLogToDB('PublicFormsController.getForms', error);
             throw new HttpException(
                 error.message || 'Failed to fetch public forms',
@@ -117,7 +120,7 @@ export class PublicFormsController {
             const from = dateFrom ? new Date(dateFrom) : null;
             const to   = dateTo   ? new Date(dateTo)   : null;
             return await this.publicFormsService.getSubmissions(dimFormId, null, from, to);
-        } catch (error) {
+        } catch (error:any) {
             await this.errorLoggerService.writeLogToDB('PublicFormsController.getSubmissions', error);
             throw new HttpException(
                 error.message || 'Failed to fetch submissions',
@@ -134,7 +137,7 @@ export class PublicFormsController {
         try {
             const results = await this.publicFormsService.getSubmissions(dimFormId, psubmissionId);
             return results?.[0] ?? null;
-        } catch (error) {
+        } catch (error:any) {
             await this.errorLoggerService.writeLogToDB('PublicFormsController.getSubmissionById', error);
             throw new HttpException(
                 error.message || 'Failed to fetch submission',
@@ -151,12 +154,79 @@ export class PublicFormsController {
         try {
             await this.publicFormsService.deleteSubmission(psubmissionId, notes ?? null);
             return { success: true };
-        } catch (error) {
+        } catch (error:any) {
             await this.errorLoggerService.writeLogToDB('PublicFormsController.deleteSubmission', error);
             throw new HttpException(
                 error.message || 'Failed to delete submission',
                 error.status || HttpStatus.INTERNAL_SERVER_ERROR,
             );
         }
+    }
+
+    @Post(':dimFormId/download-zip')
+    async downloadSubmissionDocumentsZip(
+        @Param('dimFormId', ParseIntPipe) dimFormId: number,
+        @Body() body: { psubmissionIds?: number[] },
+        @Res() res: Response,
+    ): Promise<void> {
+        const psubmissionIds = Array.isArray(body?.psubmissionIds)
+            ? Array.from(new Set(body.psubmissionIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)))
+            : [];
+
+        if (!psubmissionIds.length) {
+            throw new HttpException('No submissions selected', HttpStatus.BAD_REQUEST);
+        }
+
+        let documents: any[];
+        try {
+            documents = await this.publicFormsService.getSubmissionDocumentsForZip(dimFormId, psubmissionIds);
+        } catch (error: any) {
+            await this.errorLoggerService.writeLogToDB('PublicFormsController.downloadSubmissionDocumentsZip', error);
+            throw new HttpException(
+                error.message || 'Failed to retrieve submission documents',
+                error.status || HttpStatus.INTERNAL_SERVER_ERROR,
+            );
+        }
+
+        if (!documents.length) {
+            throw new HttpException('No documents found for selected submissions', HttpStatus.NOT_FOUND);
+        }
+
+        const zipEntries: Array<{ name: string; buffer: Buffer }> = [];
+        const usedNames = new Set<string>();
+        for (const document of documents) {
+            try {
+                const buffer = await this.publicFormsService.downloadSubmissionDocument(document);
+                zipEntries.push({
+                    name: this.publicFormsService.getZipEntryName(document, usedNames),
+                    buffer,
+                });
+            } catch {
+                continue;
+            }
+        }
+
+        if (!zipEntries.length) {
+            throw new HttpException('No downloadable documents found for selected submissions', HttpStatus.NOT_FOUND);
+        }
+
+        res.set({
+            'Content-Disposition': 'attachment; filename="Public_Form_Submission_Documents.zip"',
+            'Content-Type': 'application/zip',
+        });
+
+        const archive = archiver.create('zip', { zlib: { level: 9 } });
+        archive.on('error', () => {
+            if (!res.writableEnded) {
+                res.end();
+            }
+        });
+        archive.pipe(res);
+
+        for (const entry of zipEntries) {
+            archive.append(entry.buffer, { name: entry.name });
+        }
+
+        await archive.finalize();
     }
 }

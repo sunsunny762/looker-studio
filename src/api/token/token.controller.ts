@@ -20,7 +20,7 @@ export class TokenController {
         tokenType || null,
         activeOnly !== 'false',
       );
-    } catch (error) {
+    } catch (error:any) {
       throw new HttpException(
         error.message || 'Failed to fetch tokens',
         error.status || HttpStatus.INTERNAL_SERVER_ERROR,
@@ -42,7 +42,7 @@ export class TokenController {
       //   success: true,
       //   data: token,
       // };
-    } catch (error) {
+    } catch (error:any) {
       throw new HttpException(
         error.message || 'Failed to validate token',
         error.status || HttpStatus.INTERNAL_SERVER_ERROR,
@@ -73,7 +73,7 @@ export class TokenController {
         success: true,
         data: token,
       };
-    } catch (error) {
+    } catch (error:any) {
       throw new HttpException(
         error.message || 'Failed to create token',
         error.status || HttpStatus.INTERNAL_SERVER_ERROR,
@@ -106,7 +106,7 @@ export class TokenController {
         success: true,
         data: token,
       };
-    } catch (error) {
+    } catch (error:any) {
       throw new HttpException(
         error.message || 'Failed to update token',
         error.status || HttpStatus.INTERNAL_SERVER_ERROR,
